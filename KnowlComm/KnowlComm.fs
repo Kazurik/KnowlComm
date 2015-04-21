@@ -30,20 +30,21 @@ type KnowlConnector (version, address, port) =
     let StrToBytes (str:string) = System.Text.Encoding.UTF8.GetBytes(str)
     let IntToBytes (i:int) = if System.BitConverter.IsLittleEndian then System.BitConverter.GetBytes(i) else Array.rev (System.BitConverter.GetBytes(i))
 
-    let HandleMessagesI1 () = 
-        match reader.ReadByte() with
-        | 1uy -> eRegister.Trigger()
-        | 2uy -> eMessageReceived.Trigger(ReadMessage())
-        | _ -> ()
+    let HandleMessagesI1 = async{
+        while true do 
+            match reader.ReadByte() with
+            | 1uy -> eRegister.Trigger()
+            | 2uy -> eMessageReceived.Trigger(ReadMessage())
+            | _ -> failwith "Unknown message received!"
+        }
 
-    let HandleMessages = async{
+    let StartListener () =
         match version with
-        | I1 -> HandleMessagesI1()
-        }    
+        | I1 -> Async.Start HandleMessagesI1
 
     //Connect
     do
-        Async.Start HandleMessages
+        StartListener()
         match version with
         | I1 -> stream.WriteByte(1uy);
 
