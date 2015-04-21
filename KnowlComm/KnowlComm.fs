@@ -1,8 +1,11 @@
 ﻿namespace KnowlComm
 open System.Net.Sockets
 open System.IO
+open System
 
-type KnowlVersion = | I1
+type KnowlVersion = 
+    | I1
+    | I2
 
 type ChatMessage = {ChatName:string; Sender:string; Message:string}
 
@@ -13,6 +16,7 @@ type KnowlConnector (version, address, port) =
 
     let eRegister = Event<_>()
     let eMessageReceived = Event<ChatMessage>()
+    let eConnectionLost = Event<_>()
 
     let BToStr data len = System.Text.Encoding.ASCII.GetString(data, 0, len)
 
@@ -31,25 +35,35 @@ type KnowlConnector (version, address, port) =
     let IntToBytes (i:int) = if System.BitConverter.IsLittleEndian then System.BitConverter.GetBytes(i) else Array.rev (System.BitConverter.GetBytes(i))
 
     let HandleMessagesI1 = async{
-        while true do 
+        while client.Connected do 
             match reader.ReadByte() with
             | 1uy -> eRegister.Trigger()
             | 2uy -> eMessageReceived.Trigger(ReadMessage())
             | _ -> failwith "Unknown message received!"
+        eConnectionLost.Trigger()
         }
 
     let StartListener () =
         match version with
         | I1 -> Async.Start HandleMessagesI1
+        | I2 -> Async.Start HandleMessagesI1 //Uses same as I1.
 
     //Connect
     do
         StartListener()
         match version with
-        | I1 -> stream.WriteByte(1uy);
+        | I1 -> stream.WriteByte(1uy)
+        | I2 -> ()
+
+    interface IDisposable with
+        member x.Dispose() = 
+            stream.Close()
+            client.Close()
 
     member x.Register = eRegister.Publish
     member x.MessageRecevied = eMessageReceived.Publish
+    member x.ConnectionLost = eConnectionLost.Publish
+
     member x.SendMessage (chatName:string) (message:string) =
         let payload = Array.concat ([[|byte 2; byte chatName.Length|]; 
                                     StrToBytes chatName;  IntToBytes message.Length; 
