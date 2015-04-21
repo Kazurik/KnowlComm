@@ -2,6 +2,9 @@
 open System.Net.Sockets
 open System.IO
 open System
+open System.Net.Security;
+open System.Security.Authentication;
+open System.Security.Cryptography.X509Certificates;
 
 type KnowlVersion = 
     | I1
@@ -10,8 +13,27 @@ type KnowlVersion =
 type ChatMessage = {ChatName:string; Sender:string; Message:string}
 
 type KnowlConnector (version, address, port) = 
+    let VerifyServerCertificate sender (certificate:X509Certificate) chain sslPolicyErrors =
+        let chain2 = new X509Chain()
+        if not (System.IO.File.Exists("root.der")) then failwith "Missing root.der"
+        chain2.ChainPolicy.ExtraStore.Add(new X509Certificate2("root.der")) |> ignore
+        chain2.ChainPolicy.RevocationMode <- X509RevocationMode.NoCheck
+        chain2.Build(new X509Certificate2(certificate)) |> ignore
+        if chain2.ChainStatus.Length = 0 then true
+        else 
+            let status = chain2.ChainStatus.[0].Status
+            status = X509ChainStatusFlags.NoError || status = X509ChainStatusFlags.UntrustedRoot
+    let SelectCertificate sender targetHost (certs:X509CertificateCollection) remote issuers = certs.[0]
     let client = new TcpClient(address, port)
-    let stream = client.GetStream()
+    let stream =
+        match version with
+        | I1 -> client.GetStream() :> Stream
+        | I2 -> let stream = new SslStream(client.GetStream(), false, new RemoteCertificateValidationCallback (VerifyServerCertificate), new LocalCertificateSelectionCallback(SelectCertificate))
+                let certs = new X509Certificate2Collection();
+                if not (System.IO.File.Exists("client.p12")) then failwith "Missing client.p12"
+                certs.Import("client.p12");
+                stream.AuthenticateAsClient(address, certs, SslProtocols.Tls12, false)
+                stream :> Stream
     let reader = new BinaryReader(stream)
 
     let eRegister = Event<_>()
@@ -52,8 +74,7 @@ type KnowlConnector (version, address, port) =
     do
         StartListener()
         match version with
-        | I1 -> stream.WriteByte(1uy)
-        | I2 -> ()
+        | I1 | I2 -> stream.WriteByte(1uy)
 
     interface IDisposable with
         member x.Dispose() = 
